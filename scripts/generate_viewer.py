@@ -48,15 +48,31 @@ def build_viewer_data() -> dict:
 
         cases.append(case_data)
 
-    # Transform cases into the runs format the viewer template expects
+    # Transform cases into the runs format the viewer template expects:
+    #   run.id          - string (case name)
+    #   run.prompt      - string (user prompt)
+    #   run.grading     - object with expectations[], summary, eval_feedback
+    #   run.timing      - object with total_duration_seconds, total_tokens
+    #   run.outputs     - array of {type, name, content} objects
     runs = []
     for case_data in cases:
+        # Convert timing field names to match viewer expectations
+        timing = case_data.get("timing")
+        if timing and "duration_seconds" in timing and "total_duration_seconds" not in timing:
+            timing["total_duration_seconds"] = timing["duration_seconds"]
+
+        # Convert response string to outputs array format
+        response = case_data.get("response", "")
+        outputs = []
+        if response:
+            outputs = [{"type": "text", "name": "response.md", "content": response}]
+
         run = {
             "id": case_data["name"],
-            "prompt": case_data.get("metadata", {}).get("prompt", ""),
+            "prompt": case_data.get("metadata", {}).get("prompt", "") or "(no prompt)",
             "grading": case_data.get("grading"),
-            "timing": case_data.get("timing"),
-            "outputs": case_data.get("response", ""),
+            "timing": timing,
+            "outputs": outputs,
         }
         runs.append(run)
 
