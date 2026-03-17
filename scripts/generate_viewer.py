@@ -48,10 +48,22 @@ def build_viewer_data() -> dict:
 
         cases.append(case_data)
 
+    # Transform cases into the runs format the viewer template expects
+    runs = []
+    for case_data in cases:
+        run = {
+            "id": case_data["name"],
+            "prompt": case_data.get("metadata", {}).get("prompt", ""),
+            "grading": case_data.get("grading"),
+            "timing": case_data.get("timing"),
+            "outputs": case_data.get("response", ""),
+        }
+        runs.append(run)
+
     return {
         "skill_name": SKILL_NAME,
+        "runs": runs,
         "summary": summary,
-        "cases": cases,
         "generated_at": summary.get("timestamp", ""),
     }
 
@@ -77,12 +89,11 @@ table{{border-collapse:collapse;width:100%}}td,th{{border:1px solid #ddd;padding
     data = build_viewer_data()
     data_json = json.dumps(data)
 
-    # Embed data into template
+    # Embed data into template — variable must be EMBEDDED_DATA to match viewer.html
     if "/*__EMBEDDED_DATA__*/" in template:
-        html = template.replace("/*__EMBEDDED_DATA__*/", f"window.__EVAL_DATA__ = {data_json};")
+        html = template.replace("/*__EMBEDDED_DATA__*/", f"const EMBEDDED_DATA = {data_json};")
     else:
-        # Fallback: inject before </head>
-        script = f"<script>window.__EVAL_DATA__ = {data_json};</script>"
+        script = f"<script>const EMBEDDED_DATA = {data_json};</script>"
         html = template.replace("</head>", f"{script}\n</head>")
 
     output_path = WORKSPACE / "viewer.html"
