@@ -4,10 +4,10 @@ Thanks for your interest in contributing to skill-eval-action!
 
 ## Submitting a pull request
 
-1. [Fork](https://github.com/nicknikolakakis/skill-eval-action/fork) and clone the repository
+1. [Fork](https://github.com/skill-bench/skill-eval-action/fork) and clone the repository
 2. Make your changes
 3. Run `ruff check scripts/` and `zizmor action.yml` to lint
-4. Push to your fork and [submit a pull request](https://github.com/nicknikolakakis/skill-eval-action/compare)
+4. Push to your fork and [submit a pull request](https://github.com/skill-bench/skill-eval-action/compare)
 
 ## Guidelines
 

@@ -1,3 +1,13 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/skill-bench/skill-eval-action/main/logo.svg" alt="Skill Bench" width="200">
+</p>
+
+<p align="center">
+  <a href="https://github.com/marketplace/actions/skill-eval">Marketplace</a> |
+  <a href="https://skill-bench.dev">Documentation</a> |
+  <a href="https://github.com/skill-bench/skill-eval-action/issues">Issues</a>
+</p>
+
 # Skill Eval Action
 
 A GitHub Action that evaluates [Claude Code skills](https://resources.anthropic.com/hubfs/The-Complete-Guide-to-Building-Skill-for-Claude.pdf) against YAML test cases with automated grading and PR reporting.
@@ -7,7 +17,7 @@ A GitHub Action that evaluates [Claude Code skills](https://resources.anthropic.
 ### Single skill
 
 ```yaml
-- uses: nicknikolakakis/skill-eval-action@v1
+- uses: skill-bench/skill-eval-action@v1
   with:
     skill-name: tf-guide
     skill-path: ./skills/tf-guide
@@ -43,7 +53,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: nicknikolakakis/skill-eval-action@v1
+      - uses: skill-bench/skill-eval-action@v1
         with:
           skill-name: ${{ matrix.skill }}
           skill-path: skills/${{ matrix.skill }}
@@ -80,11 +90,10 @@ jobs:
 
       - name: Discover skills with evals
         id: discover
-        run: python ${{ github.action_path }}/scripts/discover.py skills
-        # Or inline without the script:
-        # run: |
-        #   skills=$(find skills -name "*.yaml" -path "*/evals/*" -exec dirname {} \; | xargs -I{} dirname {} | xargs -I{} basename {} | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')
-        #   echo "skills=$skills" >> "$GITHUB_OUTPUT"
+        run: |
+          skills=$(find skills -name "*.yaml" -path "*/evals/*" -exec dirname {} \; | xargs -I{} dirname {} | xargs -I{} basename {} | sort -u | jq -R -s -c 'split("\n") | map(select(. != ""))')
+          echo "skills=$skills" >> "$GITHUB_OUTPUT"
+          echo "count=$(echo $skills | jq length)" >> "$GITHUB_OUTPUT"
 
       - name: Summary
         run: echo "Found ${{ steps.discover.outputs.count }} skills with evals"
@@ -101,7 +110,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: nicknikolakakis/skill-eval-action@v1
+      - uses: skill-bench/skill-eval-action@v1
         with:
           skill-name: ${{ matrix.skill }}
           skill-path: skills/${{ matrix.skill }}
@@ -144,7 +153,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
-      - uses: nicknikolakakis/skill-eval-action@v1
+      - uses: skill-bench/skill-eval-action@v1
         with:
           skill-name: ${{ matrix.skill }}
           skill-path: skills/${{ matrix.skill }}
