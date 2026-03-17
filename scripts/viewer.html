@@ -114,18 +114,6 @@
     .bar.green { background: var(--green); }
     .bar.red { background: var(--red); }
 
-    /* Feedback form */
-    .feedback-form { display: flex; flex-direction: column; gap: 0.75rem; }
-    .feedback-form textarea {
-      width: 100%; min-height: 100px; padding: 0.75rem; border: 1px solid var(--border);
-      border-radius: var(--radius); font-family: inherit; font-size: 0.9rem; resize: vertical;
-    }
-    .feedback-form button {
-      align-self: flex-start; background: var(--accent); color: white; border: none;
-      padding: 0.5rem 1.25rem; border-radius: var(--radius); cursor: pointer; font-weight: 600;
-    }
-    .feedback-form button:hover { background: var(--accent-hover); }
-
     /* Summary bar */
     .summary-bar {
       display: flex; gap: 1.5rem; padding: 0.75rem 1rem; background: var(--bg);
@@ -152,13 +140,11 @@
   <div class="tabs">
     <div class="tab active" data-tab="grading">Grading</div>
     <div class="tab" data-tab="benchmark">Benchmark</div>
-    <div class="tab" data-tab="feedback">Feedback</div>
   </div>
 
   <div class="main">
     <div id="tab-grading" class="tab-content active"></div>
     <div id="tab-benchmark" class="tab-content"></div>
-    <div id="tab-feedback" class="tab-content"></div>
   </div>
 
   <script>
@@ -256,7 +242,7 @@
             <div class="claim">
               <span class="badge ${c.verified ? 'pass' : 'fail'}" style="font-size: 0.65rem">${c.verified ? 'OK' : '?'}</span>
               <strong>${escapeHtml(c.type)}</strong>: ${escapeHtml(c.claim)}
-              ${c.evidence ? ` — <em style="color: var(--text-muted)">${escapeHtml(c.evidence)}</em>` : ''}
+              ${c.evidence ? ` - <em style="color: var(--text-muted)">${escapeHtml(c.evidence)}</em>` : ''}
             </div>
           `).join('')}
         </div>
@@ -304,125 +290,54 @@
       </div>`;
     }
 
-    // Benchmark tab
+    // Benchmark tab - uses summary data from the eval run
     function renderBenchmark() {
       const container = document.getElementById('tab-benchmark');
-      const bm = data.benchmark;
-      if (!bm) {
-        container.innerHTML = '<p style="color:var(--text-muted)">No benchmark data available. Run <code>aggregate_benchmark.py</code> first.</p>';
+      const summary = data.summary;
+
+      if (!summary || !summary.results?.length) {
+        container.innerHTML = '<p style="color:var(--text-muted)">No benchmark data available.</p>';
         return;
       }
 
-      let html = '<h2 style="font-size:1.1rem;margin-bottom:1rem">Benchmark Summary</h2>';
+      const passRate = summary.pass_rate || 0;
+      const prClass = passRate >= 80 ? 'good' : 'bad';
 
-      // Summary table
-      const summary = bm.run_summary || {};
-      const configs = Object.keys(summary).filter(k => k !== 'delta');
-      const delta = summary.delta || {};
+      let html = `
+        <div class="summary-bar">
+          <div class="summary-stat"><span class="label">Pass Rate:</span> <span class="value ${prClass}">${passRate.toFixed(1)}%</span></div>
+          <div class="summary-stat"><span class="label">Cases:</span> <span class="value">${summary.total_cases}</span></div>
+          <div class="summary-stat"><span class="label">Criteria:</span> <span class="value">${summary.total_passed}/${summary.total_criteria}</span></div>
+          <div class="summary-stat"><span class="label">Time:</span> <span class="value">${(summary.total_time || 0).toFixed(1)}s</span></div>
+          <div class="summary-stat"><span class="label">Tokens:</span> <span class="value">${(summary.total_tokens || 0).toLocaleString()}</span></div>
+          ${summary.total_cost_usd ? `<div class="summary-stat"><span class="label">Cost:</span> <span class="value">$${summary.total_cost_usd.toFixed(4)}</span></div>` : ''}
+        </div>
+      `;
 
-      html += '<table class="bench-table"><tr><th>Metric</th>';
-      configs.forEach(c => { html += `<th>${c.replace(/_/g,' ')}</th>`; });
-      if (delta.pass_rate) html += '<th>Delta</th>';
-      html += '</tr>';
-
-      ['pass_rate', 'time_seconds', 'tokens'].forEach(metric => {
-        html += `<tr><td style="font-weight:600">${metric.replace(/_/g,' ')}</td>`;
-        configs.forEach(c => {
-          const s = summary[c]?.[metric] || {};
-          if (metric === 'pass_rate') {
-            html += `<td>${((s.mean||0)*100).toFixed(0)}% +/- ${((s.stddev||0)*100).toFixed(0)}%</td>`;
-          } else {
-            html += `<td>${(s.mean||0).toFixed(1)} +/- ${(s.stddev||0).toFixed(1)}</td>`;
-          }
-        });
-        if (delta[metric]) html += `<td>${delta[metric]}</td>`;
-        html += '</tr>';
+      html += '<table class="bench-table"><tr><th>#</th><th>Case</th><th>Status</th><th>Pass Rate</th><th>Time</th><th>Tokens</th></tr>';
+      summary.results.forEach((r, i) => {
+        const passed = r.criteria_passed || 0;
+        const total = r.criteria_total || 0;
+        const pct = total > 0 ? (passed / total * 100).toFixed(0) : 0;
+        const barW = Math.max(2, pct * 0.8);
+        const barClass = passed === total && r.status === 'completed' ? 'green' : 'red';
+        const statusIcon = passed === total && r.status === 'completed' ? 'PASS' : 'FAIL';
+        html += `<tr>
+          <td>${i + 1}</td>
+          <td>${escapeHtml(r.name)}</td>
+          <td><span class="badge ${barClass === 'green' ? 'pass' : 'fail'}">${statusIcon}</span></td>
+          <td><span class="bar ${barClass}" style="width:${barW}px"></span> ${pct}% (${passed}/${total})</td>
+          <td>${(r.elapsed || 0).toFixed(1)}s</td>
+          <td>${(r.tokens || 0).toLocaleString()}</td>
+        </tr>`;
       });
       html += '</table>';
 
-      // Per-run results
-      if (bm.runs?.length) {
-        html += '<h3 style="font-size:0.95rem;margin:1.5rem 0 0.75rem">Per-Run Results</h3>';
-        html += '<table class="bench-table"><tr><th>#</th><th>Eval</th><th>Config</th><th>Pass Rate</th><th>Time</th><th>Tokens</th></tr>';
-        bm.runs.forEach(run => {
-          const r = run.result || {};
-          const pct = ((r.pass_rate || 0) * 100).toFixed(0);
-          const barW = Math.max(2, pct * 0.8);
-          const barClass = pct >= 80 ? 'green' : 'red';
-          html += `<tr>
-            <td>${run.eval_id}</td>
-            <td>${run.eval_name || ''}</td>
-            <td>${run.configuration || ''}</td>
-            <td><span class="bar ${barClass}" style="width:${barW}px"></span> ${pct}% (${r.passed||0}/${r.total||0})</td>
-            <td>${(r.time_seconds||0).toFixed(1)}s</td>
-            <td>${(r.tokens||0).toLocaleString()}</td>
-          </tr>`;
-        });
-        html += '</table>';
-      }
-
-      // Notes
-      if (bm.notes?.length) {
-        html += '<div style="margin-top:1.5rem"><h3 style="font-size:0.95rem;margin-bottom:0.5rem">Analyzer Notes</h3><ul>';
-        bm.notes.forEach(n => { html += `<li style="font-size:0.85rem;margin:0.25rem 0">${escapeHtml(n)}</li>`; });
-        html += '</ul></div>';
+      if (summary.timestamp) {
+        html += `<p style="margin-top:1rem;font-size:0.8rem;color:var(--text-muted)">Generated: ${summary.timestamp}</p>`;
       }
 
       container.innerHTML = html;
-    }
-
-    // Feedback tab
-    function renderFeedback() {
-      const container = document.getElementById('tab-feedback');
-      let html = '';
-      data.runs.forEach(run => {
-        html += `
-          <div class="card">
-            <div class="card-header"><span>${run.id}</span></div>
-            <div class="card-body">
-              <div class="prompt" style="font-size:0.8rem;margin-bottom:0.75rem">${escapeHtml(run.prompt.substring(0, 200))}${run.prompt.length > 200 ? '...' : ''}</div>
-              <div class="feedback-form">
-                <textarea id="fb-${run.id}" placeholder="Your feedback on this run..."></textarea>
-                <div style="display:flex;gap:0.5rem;align-items:center">
-                  <label style="font-size:0.8rem;color:var(--text-muted)">Quality:</label>
-                  ${[1,2,3,4,5].map(n => `<label style="font-size:0.85rem"><input type="radio" name="q-${run.id}" value="${n}"> ${n}</label>`).join('')}
-                </div>
-                <button onclick="saveFeedback('${run.id}')">Save</button>
-              </div>
-            </div>
-          </div>
-        `;
-      });
-      container.innerHTML = html;
-    }
-
-    function saveFeedback(runId) {
-      const textarea = document.getElementById(`fb-${runId}`);
-      const quality = document.querySelector(`input[name="q-${runId}"]:checked`);
-
-      fetch('/api/feedback', { method: 'GET' })
-        .then(r => r.json())
-        .then(existing => {
-          const reviews = existing.reviews || [];
-          reviews.push({
-            run_id: runId,
-            feedback: textarea.value,
-            quality: quality ? parseInt(quality.value) : null,
-            timestamp: new Date().toISOString(),
-          });
-          return fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ reviews }),
-          });
-        })
-        .then(r => {
-          if (r.ok) {
-            textarea.style.borderColor = 'var(--green)';
-            setTimeout(() => { textarea.style.borderColor = ''; }, 2000);
-          }
-        })
-        .catch(() => {});
     }
 
     function escapeHtml(str) {
@@ -433,7 +348,6 @@
     // Init
     renderGrading();
     renderBenchmark();
-    renderFeedback();
   </script>
 </body>
 </html>

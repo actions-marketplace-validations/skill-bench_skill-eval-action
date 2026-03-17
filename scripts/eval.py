@@ -88,6 +88,7 @@ def execute_case(case: dict, skill_content: str, case_dir: Path) -> dict:
         elapsed = time.time() - start
         response_text = ""
         total_tokens = 0
+        cost_usd = 0
         skill_triggered = False
 
         for line in result.stdout.splitlines():
@@ -106,7 +107,14 @@ def execute_case(case: dict, skill_content: str, case_dir: Path) -> dict:
                         if content.get("name") == "Skill" and SKILL_NAME in json.dumps(content.get("input", {})):
                             skill_triggered = True
             elif event.get("type") == "result":
-                total_tokens = event.get("total_tokens", 0)
+                usage = event.get("usage", {})
+                total_tokens = (
+                    usage.get("input_tokens", 0)
+                    + usage.get("output_tokens", 0)
+                    + usage.get("cache_creation_input_tokens", 0)
+                    + usage.get("cache_read_input_tokens", 0)
+                )
+                cost_usd = event.get("total_cost_usd", 0)
                 if not response_text:
                     response_text = event.get("result", "")
 
@@ -126,7 +134,8 @@ def execute_case(case: dict, skill_content: str, case_dir: Path) -> dict:
         return {
             "name": case["name"], "status": "completed",
             "elapsed": round(elapsed, 1), "tokens": total_tokens,
-            "skill_triggered": skill_triggered, "response": response_text,
+            "cost_usd": cost_usd, "skill_triggered": skill_triggered,
+            "response": response_text,
         }
     except subprocess.TimeoutExpired:
         return {"name": case["name"], "status": "timeout", "elapsed": round(time.time() - start, 1), "tokens": 0, "response": ""}
@@ -250,6 +259,7 @@ def main() -> None:
     total_criteria = sum(g.get("summary", {}).get("total", 0) for g in gradings)
     total_time = sum(r.get("elapsed", 0) for r in exec_results)
     total_tokens = sum(r.get("tokens", 0) for r in exec_results)
+    total_cost = sum(r.get("cost_usd", 0) for r in exec_results)
     pass_rate = (total_passed / total_criteria * 100) if total_criteria > 0 else 0
 
     # Write summary
@@ -262,6 +272,7 @@ def main() -> None:
         "pass_rate": round(pass_rate, 1),
         "total_time": round(total_time, 1),
         "total_tokens": total_tokens,
+        "total_cost_usd": round(total_cost, 4),
         "results": [
             {
                 "name": case["name"],
@@ -292,7 +303,7 @@ def main() -> None:
             status_emoji = "✅" if pass_rate >= PASS_THRESHOLD else "❌"
             f.write(f"## {status_emoji} Skill Eval: {SKILL_NAME}\n\n")
             f.write(f"**Pass rate: {total_passed}/{total_criteria} ({pass_rate:.1f}%)** | ")
-            f.write(f"Threshold: {PASS_THRESHOLD:.0f}% | Time: {total_time:.1f}s | Tokens: {total_tokens:,}\n\n")
+            f.write(f"Threshold: {PASS_THRESHOLD:.0f}% | Time: {total_time:.1f}s | Tokens: {total_tokens:,} | Cost: ${total_cost:.4f}\n\n")
             f.write("| # | Case | Status | Criteria | Time | Tokens |\n")
             f.write("|---|------|--------|----------|------|--------|\n")
             for i, r in enumerate(summary["results"]):
