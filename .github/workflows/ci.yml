@@ -22,19 +22,17 @@ jobs:
           python-version: '3.13'
 
       - name: Install tools
-        run: uv pip install ruff pyyaml zizmor --system --quiet
+        run: uv pip install ruff pyyaml zizmor --quiet
 
       - name: Lint Python scripts
-        run: ruff check scripts/
+        run: uv run ruff check scripts/
 
       - name: Validate action.yml
         run: |
-          python -c "
-          import yaml
+          uv run python -c "
+          import yaml, re
           with open('action.yml') as f:
               content = f.read()
-          # Replace GitHub Actions expressions before parsing
-          import re
           clean = re.sub(r'\$\{\{.*?\}\}', 'PLACEHOLDER', content)
           data = yaml.safe_load(clean)
           assert 'name' in data, 'Missing name'
@@ -44,4 +42,4 @@ jobs:
           "
 
       - name: Lint workflows with zizmor
-        run: zizmor action.yml .github/workflows/*.yml
+        run: uv run zizmor action.yml .github/workflows/*.yml
