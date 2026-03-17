@@ -40,6 +40,14 @@ inputs:
     description: 'Node.js version for claude CLI installation'
     required: false
     default: '22'
+  max-retries:
+    description: 'Max retry attempts per API call on timeout/error'
+    required: false
+    default: '3'
+  retry-delay:
+    description: 'Base delay between retries in seconds (multiplied by attempt number)'
+    required: false
+    default: '10'
 
 outputs:
   pass-rate:
@@ -94,6 +102,8 @@ runs:
         PASS_THRESHOLD: ${{ inputs.pass-threshold }}
         ANTHROPIC_API_KEY: ${{ inputs.anthropic-api-key }}
         WORKSPACE: ${{ runner.temp }}/skill-eval/${{ inputs.skill-name }}
+        MAX_RETRIES: ${{ inputs.max-retries }}
+        RETRY_DELAY: ${{ inputs.retry-delay }}
 
     - name: Generate eval viewer
       if: inputs.upload-viewer == 'true'

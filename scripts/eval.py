@@ -27,6 +27,8 @@ SKILL_PATH = Path(os.environ["SKILL_PATH"])
 WORKSPACE = Path(os.environ["WORKSPACE"])
 EVAL_TIMEOUT = int(os.environ.get("EVAL_TIMEOUT", "120"))
 PASS_THRESHOLD = float(os.environ.get("PASS_THRESHOLD", "80"))
+MAX_RETRIES = int(os.environ.get("MAX_RETRIES", "3"))
+RETRY_DELAY = int(os.environ.get("RETRY_DELAY", "10"))
 
 
 # ---------------------------------------------------------------------------
@@ -53,8 +55,79 @@ def discover_evals(skill_path: Path) -> list[dict]:
 # Execution
 # ---------------------------------------------------------------------------
 
+def _run_claude(prompt: str, work_dir: Path, timeout: int) -> subprocess.CompletedProcess:
+    """Run claude -p with retries on timeout/error."""
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            result = subprocess.run(
+                ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"],
+                capture_output=True, text=True,
+                timeout=timeout, cwd=str(work_dir), env=env,
+            )
+            # Check for empty response (API error, rate limit)
+            if result.returncode != 0 and attempt < MAX_RETRIES:
+                delay = RETRY_DELAY * attempt
+                print(f"  ::warning::Attempt {attempt}/{MAX_RETRIES} failed (exit {result.returncode}), retrying in {delay}s...")
+                time.sleep(delay)
+                continue
+            return result
+        except subprocess.TimeoutExpired:
+            if attempt < MAX_RETRIES:
+                delay = RETRY_DELAY * attempt
+                print(f"  ::warning::Attempt {attempt}/{MAX_RETRIES} timed out after {timeout}s, retrying in {delay}s...")
+                time.sleep(delay)
+                continue
+            raise
+
+    return result  # type: ignore
+
+
+def _parse_stream_json(stdout: str) -> dict:
+    """Parse claude stream-json output into structured data."""
+    response_text = ""
+    total_tokens = 0
+    cost_usd = 0.0
+    skill_triggered = False
+
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "assistant":
+            for content in event.get("message", {}).get("content", []):
+                if content.get("type") == "text":
+                    response_text += content.get("text", "")
+                elif content.get("type") == "tool_use":
+                    if content.get("name") == "Skill" and SKILL_NAME in json.dumps(content.get("input", {})):
+                        skill_triggered = True
+        elif event.get("type") == "result":
+            usage = event.get("usage", {})
+            total_tokens = (
+                usage.get("input_tokens", 0)
+                + usage.get("output_tokens", 0)
+                + usage.get("cache_creation_input_tokens", 0)
+                + usage.get("cache_read_input_tokens", 0)
+            )
+            cost_usd = event.get("total_cost_usd", 0)
+            if not response_text:
+                response_text = event.get("result", "")
+
+    return {
+        "response_text": response_text,
+        "total_tokens": total_tokens,
+        "cost_usd": cost_usd,
+        "skill_triggered": skill_triggered,
+    }
+
+
 def execute_case(case: dict, skill_content: str, case_dir: Path) -> dict:
-    """Run a single eval case via claude -p and capture output."""
+    """Run a single eval case via claude -p with retries."""
     case_dir.mkdir(parents=True, exist_ok=True)
 
     # Create temp dir with any specified files
@@ -76,66 +149,31 @@ def execute_case(case: dict, skill_content: str, case_dir: Path) -> dict:
         prompt = raw_prompt
 
     start = time.time()
-    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
     try:
-        result = subprocess.run(
-            ["claude", "-p", prompt, "--output-format", "stream-json", "--verbose"],
-            capture_output=True, text=True,
-            timeout=case.get("timeout", EVAL_TIMEOUT),
-            cwd=str(work_dir), env=env,
-        )
+        result = _run_claude(prompt, work_dir, case.get("timeout", EVAL_TIMEOUT))
         elapsed = time.time() - start
-        response_text = ""
-        total_tokens = 0
-        cost_usd = 0
-        skill_triggered = False
-
-        for line in result.stdout.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            if event.get("type") == "assistant":
-                for content in event.get("message", {}).get("content", []):
-                    if content.get("type") == "text":
-                        response_text += content.get("text", "")
-                    elif content.get("type") == "tool_use":
-                        if content.get("name") == "Skill" and SKILL_NAME in json.dumps(content.get("input", {})):
-                            skill_triggered = True
-            elif event.get("type") == "result":
-                usage = event.get("usage", {})
-                total_tokens = (
-                    usage.get("input_tokens", 0)
-                    + usage.get("output_tokens", 0)
-                    + usage.get("cache_creation_input_tokens", 0)
-                    + usage.get("cache_read_input_tokens", 0)
-                )
-                cost_usd = event.get("total_cost_usd", 0)
-                if not response_text:
-                    response_text = event.get("result", "")
+        parsed = _parse_stream_json(result.stdout)
 
         # Write outputs
-        (case_dir / "response.md").write_text(response_text)
+        (case_dir / "response.md").write_text(parsed["response_text"])
         (case_dir / "timing.json").write_text(json.dumps({
-            "total_tokens": total_tokens,
+            "total_tokens": parsed["total_tokens"],
             "duration_seconds": round(elapsed, 1),
         }, indent=2))
         (case_dir / "eval_metadata.json").write_text(json.dumps({
             "prompt": raw_prompt,
             "criteria": case.get("criteria", []),
             "expect_skill": case.get("expect_skill", True),
-            "skill_triggered": skill_triggered,
+            "skill_triggered": parsed["skill_triggered"],
         }, indent=2))
 
         return {
             "name": case["name"], "status": "completed",
-            "elapsed": round(elapsed, 1), "tokens": total_tokens,
-            "cost_usd": cost_usd, "skill_triggered": skill_triggered,
-            "response": response_text,
+            "elapsed": round(elapsed, 1), "tokens": parsed["total_tokens"],
+            "cost_usd": parsed["cost_usd"],
+            "skill_triggered": parsed["skill_triggered"],
+            "response": parsed["response_text"],
         }
     except subprocess.TimeoutExpired:
         return {"name": case["name"], "status": "timeout", "elapsed": round(time.time() - start, 1), "tokens": 0, "response": ""}
@@ -150,7 +188,7 @@ def execute_case(case: dict, skill_content: str, case_dir: Path) -> dict:
 # ---------------------------------------------------------------------------
 
 def grade_case(case: dict, exec_result: dict, case_dir: Path) -> dict:
-    """Grade an executed eval case via claude -p."""
+    """Grade an executed eval case via claude -p with retries."""
     criteria = case.get("criteria", [])
     criteria_text = "\n".join(f"  {i+1}. {c}" for i, c in enumerate(criteria))
     response = exec_result.get("response", "(No response captured)")
@@ -158,7 +196,7 @@ def grade_case(case: dict, exec_result: dict, case_dir: Path) -> dict:
     if len(response) > 10000:
         response = response[:10000] + "\n\n... (truncated at 10KB) ..."
 
-    grader_prompt = f"""You are an eval grader. Grade this skill response against criteria. Be strict — FAIL if evidence is weak or superficial.
+    grader_prompt = f"""You are an eval grader. Grade this skill response against criteria. Be strict - FAIL if evidence is weak or superficial.
 
 CRITERIA:
 {criteria_text}
@@ -176,28 +214,45 @@ Output ONLY valid JSON in this exact format (no markdown, no explanation):
 
     env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 
-    try:
-        result = subprocess.run(
-            ["claude", "-p", grader_prompt, "--output-format", "text"],
-            capture_output=True, text=True, timeout=60, env=env,
-        )
-        output = result.stdout.strip()
-        if "```json" in output:
-            output = output.split("```json")[1].split("```")[0].strip()
-        elif "```" in output:
-            output = output.split("```")[1].split("```")[0].strip()
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            result = subprocess.run(
+                ["claude", "-p", grader_prompt, "--output-format", "text"],
+                capture_output=True, text=True, timeout=60, env=env,
+            )
+            output = result.stdout.strip()
+            if "```json" in output:
+                output = output.split("```json")[1].split("```")[0].strip()
+            elif "```" in output:
+                output = output.split("```")[1].split("```")[0].strip()
 
-        grading = json.loads(output)
-        (case_dir / "grading.json").write_text(json.dumps(grading, indent=2) + "\n")
-        return grading
+            grading = json.loads(output)
+            (case_dir / "grading.json").write_text(json.dumps(grading, indent=2) + "\n")
+            return grading
 
-    except Exception as e:
-        fallback = {
-            "expectations": [{"text": c, "passed": False, "evidence": f"Grading failed: {e}"} for c in criteria],
-            "summary": {"passed": 0, "failed": len(criteria), "total": len(criteria), "pass_rate": 0.0},
-        }
-        (case_dir / "grading.json").write_text(json.dumps(fallback, indent=2) + "\n")
-        return fallback
+        except (json.JSONDecodeError, subprocess.TimeoutExpired) as e:
+            if attempt < MAX_RETRIES:
+                delay = RETRY_DELAY * attempt
+                print(f"  ::warning::Grading attempt {attempt}/{MAX_RETRIES} failed ({e.__class__.__name__}), retrying in {delay}s...")
+                time.sleep(delay)
+                continue
+            # Final attempt failed
+            fallback = {
+                "expectations": [{"text": c, "passed": False, "evidence": f"Grading failed after {MAX_RETRIES} attempts: {e}"} for c in criteria],
+                "summary": {"passed": 0, "failed": len(criteria), "total": len(criteria), "pass_rate": 0.0},
+            }
+            (case_dir / "grading.json").write_text(json.dumps(fallback, indent=2) + "\n")
+            return fallback
+        except Exception as e:
+            fallback = {
+                "expectations": [{"text": c, "passed": False, "evidence": f"Grading failed: {e}"} for c in criteria],
+                "summary": {"passed": 0, "failed": len(criteria), "total": len(criteria), "pass_rate": 0.0},
+            }
+            (case_dir / "grading.json").write_text(json.dumps(fallback, indent=2) + "\n")
+            return fallback
+
+    # Should not reach here, but just in case
+    return fallback  # type: ignore
 
 
 # ---------------------------------------------------------------------------
