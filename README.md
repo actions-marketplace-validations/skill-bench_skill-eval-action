@@ -177,6 +177,8 @@ Within a single skill, eval cases run sequentially to avoid Anthropic API rate l
 | `github-token` | No | `${{ github.token }}` | Token for PR comments |
 | `upload-viewer` | No | `true` | Upload eval-viewer HTML as an artifact |
 | `node-version` | No | `22` | Node.js version for claude CLI installation |
+| `max-retries` | No | `3` | Max retry attempts per API call on timeout/error |
+| `retry-delay` | No | `10` | Base delay between retries in seconds (multiplied by attempt number) |
 
 ## Outputs
 
